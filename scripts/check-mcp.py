@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Read-only MCP integration check. Runs a real stdio client against the built server."""
-import argparse, json, os, selectors, subprocess, time
+import argparse, json, os, selectors, subprocess, tempfile, time
 from pathlib import Path
 
 class Client:
     def __init__(self, server, config=None):
         env = dict(os.environ)
         if config: env["DIGUP_SETTINGS_FILE"] = str(Path(config).resolve())
-        self.log = open(Path(server).parent / "mcp-check.stderr.log", "w")
+        self.log = tempfile.TemporaryFile(mode="w+")
         self.process = subprocess.Popen([server], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                         stderr=self.log, text=True, bufsize=1, env=env)
         self.next_id = 0

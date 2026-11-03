@@ -1,6 +1,6 @@
 import Foundation
 
-/// Timestamped lines in `<index folder>/app.log` and on stderr. This is how the app gets measured during
+/// Timestamped lines in `<index folder>/personal-app.log` and on stderr. This is how the app gets measured during
 /// development (launch, sync, search and indexing timings), so lines say what happened and how long it took.
 nonisolated final class AppLog: @unchecked Sendable {
     static let shared = AppLog()
@@ -9,7 +9,7 @@ nonisolated final class AppLog: @unchecked Sendable {
 
     func open(in folder: URL) {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let url = folder.appendingPathComponent("app.log")
+        let url = folder.appendingPathComponent("personal-app.log")
         if !FileManager.default.fileExists(atPath: url.path) {
             FileManager.default.createFile(atPath: url.path, contents: nil)
         }

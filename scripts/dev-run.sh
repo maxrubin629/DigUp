@@ -5,7 +5,7 @@
 #   scripts/dev-run.sh -debugQuery "zebra" -debugSnapshot /tmp/panel.png -debugQuit YES
 # ROOTS=a:b:c overrides the folders (keep them inside the testbed); ROOTS= (empty) launches with none, as a fresh
 # install would. INDEX, MODELS and SUITE override the rest; APP=/Applications/DigUp.app runs an installed copy the
-# same way. The app's log is <index>/app.log.
+# same way. The app's log is <index>/personal-app.log.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 TB="${TESTBED:-$HOME/DigUpTestbed}"
