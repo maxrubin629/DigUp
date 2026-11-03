@@ -24,6 +24,7 @@ final class AppModel {
     var statusLine: String {
         let status = self.status
         guard hasFolders else { return "No folders chosen yet" }
+        if status.originalAppRunning { return "\(status.searchable.formatted()) files indexed · Search only while original DigUp is open" }
         switch status.activity {
         case .starting: return "Starting…"
         case .failed(let problem): return "⚠︎ \(problem)"
@@ -112,6 +113,7 @@ final class AppModel {
 
     /// A few words for the search bar while results may be incomplete: "Indexing 42%", "Downloading model · 42%".
     var activityBadge: String? {
+        if status.originalAppRunning { return "Search only" }
         if download.isActive { return "Downloading model · \(Int(download.fraction * 100))%" }
         if case .indexing(let done, let total) = status.activity, total > 0 {
             return "Indexing \(Int(Double(done) / Double(total) * 100))%"

@@ -22,7 +22,7 @@ public struct FileRecord: Sendable {
 public final class IndexStore {
     public let directory: URL
     public let db: Database
-    static let schemaVersion: Int64 = 5
+    public static let schemaVersion: Int64 = 5
 
     /// Keyword search's tokenizer. Marks (M*) count as letters, so Bengali vowel signs and Arabic harakat stay inside
     /// their words: by default SQLite splits on them ("কলকাতায়" became "কলক", "ত", "য").
@@ -68,12 +68,18 @@ public final class IndexStore {
 
     public let file: URL
 
-    public init(directory: URL, file name: String = IndexStore.mainFile) throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    public init(directory: URL, file name: String = IndexStore.mainFile, readOnly: Bool = false) throws {
+        if !readOnly { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
         self.directory = directory
         file = directory.appendingPathComponent(name)
-        db = try Database(path: file.path)
-        try migrate()
+        db = try Database(path: file.path, readOnly: readOnly)
+        if readOnly {
+            var version: Int64 = 0
+            try db.query("PRAGMA user_version") { version = $0.int(0) }
+            guard version == Self.schemaVersion else {
+                throw Database.Failure(message: "Index schema \(version) is incompatible with DigUp Personal (requires \(Self.schemaVersion)). Your index was not changed.")
+            }
+        } else { try migrate() }
     }
 
     /// Bytes on disk: the database and its write-ahead log.

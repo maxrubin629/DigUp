@@ -134,10 +134,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         }
         menu.addItem(.separator())
         menu.addItem(ActionMenuItem("Settings…", key: ",") { [weak self] in self?.onSettings() })
-        if model.updateAvailable == nil {
-            menu.addItem(ActionMenuItem("Check for Updates…") { [weak self] in self?.onCheckForUpdates() })
-        }
-        menu.addItem(ActionMenuItem("Quit DigUp", key: "q") { NSApp.terminate(nil) })
+        menu.addItem(ActionMenuItem("Quit DigUp Personal", key: "q") { NSApp.terminate(nil) })
     }
 
     /// The menu as text, for the -debugMenu launch argument (menus can't be clicked from a script).

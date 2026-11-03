@@ -4,7 +4,7 @@ import Observation
 import SwiftUI
 
 enum SettingsTab: String, CaseIterable {
-    case general, folders, code, storage
+    case general, folders, code, storage, integrations
 
     var title: String {
         switch self {
@@ -12,6 +12,7 @@ enum SettingsTab: String, CaseIterable {
         case .folders: "Folders"
         case .code: "Code"
         case .storage: "Storage"
+        case .integrations: "Integrations"
         }
     }
 
@@ -21,6 +22,7 @@ enum SettingsTab: String, CaseIterable {
         case .folders: "folder"
         case .code: "chevron.left.forwardslash.chevron.right"
         case .storage: "internaldrive"
+        case .integrations: "link"
         }
     }
 }
@@ -183,6 +185,7 @@ private struct SettingsPane: View {
                 case .folders: FolderSettings(state: state)
                 case .code: CodeSettings(state: state)
                 case .storage: StorageSettings(state: state)
+                case .integrations: IntegrationsSettings()
                 }
             }
             .frame(width: 580)
@@ -231,25 +234,7 @@ private struct GeneralSettings: View {
                 }
             }
             Section {
-                Toggle(isOn: Binding(get: { state.checksForUpdates }, set: { on in
-                    state.app.updates.automaticallyChecks = on
-                    state.checksForUpdates = on
-                })) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Check for updates automatically")
-                        Text("Once a day DigUp asks GitHub for its newest version; nothing about your files is sent. "
-                             + "Updates install with one click.")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                LabeledContent {
-                    Button("Check Now") { state.app.updates.checkNow() }
-                } label: {
-                    Text(state.model.updateAvailable.map { "DigUp \($0) is available" }
-                         ?? "DigUp \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")")
-                }
+                LabeledContent("Version", value: "DigUp Personal " + (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""))
             }
         }
         .formStyle(.grouped)
@@ -799,5 +784,29 @@ private struct PathButton: View {
         }
         .buttonStyle(.plain)
         .help("Show in Finder")
+    }
+}
+
+private struct IntegrationsSettings: View {
+    @State private var copied = false
+    private var command: String {
+        let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/digup-mcp").path
+        return "codex mcp add digup -- '" + helper.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Connect Codex").font(.title2.bold())
+            Text("Let Codex search the same index with text, images, or audio clips. Your chosen folders and exclusions apply.")
+                .fixedSize(horizontal: false, vertical: true)
+            Text(command).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                .padding(12).background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+            Button(copied ? "Copied" : "Copy connection command") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(command, forType: .string)
+                copied = true
+            }
+            Text("Run this command in Terminal, then restart Codex to connect. DigUp Personal can keep indexing while Codex searches.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }.padding(24)
     }
 }

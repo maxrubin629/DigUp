@@ -10,10 +10,16 @@ let vendor = "\(Context.packageDirectory)/Vendor"
 #if os(macOS)
 let llamaModule = "Sources/CLlama"                        // static llama.cpp with Metal (scripts/build-llama.sh)
 let llamaLink: [LinkerSetting] = [.unsafeFlags(["-L\(vendor)/llama/lib"])]
-let engineDependencies: [Target.Dependency] = []
+let engineDependencies: [Target.Dependency] = ["CSQLite"]
 let testDependencies: [Target.Dependency] = []
 let engineLink: [LinkerSetting] = []
-let portableTargets: [Target] = []
+let portableTargets: [Target] = [
+    // Pin SQLite for reliable read-only WAL access even when the original app is closed.
+    .target(name: "CSQLite", path: "Vendor/sqlite", cSettings: [
+        .define("SQLITE_ENABLE_FTS5"), .define("SQLITE_THREADSAFE", to: "1"), .define("SQLITE_DQS", to: "0"),
+        .define("SQLITE_OMIT_LOAD_EXTENSION"), .unsafeFlags(["-w"]),
+    ]),
+]
 #else
 // llama.cpp as shared libraries: ggml's backends (CPU, and CUDA or Vulkan when the machine has them) load at run time
 // from beside the helper (`LlamaEmbedder`), so one build runs anywhere. Dev builds find them in Vendor/.
@@ -52,17 +58,19 @@ let portableTargets: [Target] = [
 #endif
 
 #if os(macOS)
-let appProducts: [Product] = [.executable(name: "DigUpApp", targets: ["DigUpApp"])]
+let appProducts: [Product] = [.executable(name: "DigUpApp", targets: ["DigUpApp"]),
+                              .executable(name: "digup-mcp", targets: ["digup-mcp"])]
 let appDependencies: [Package.Dependency] = [
-    // In-app updates (the app only). build.sh embeds the framework in Contents/Frameworks and signs it.
-    .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"),
+    // Local MCP integration. Personal builds do not include the upstream updater.
+    .package(url: "https://github.com/modelcontextprotocol/swift-sdk", exact: "0.12.1"),
 ]
 let appTargets: [Target] = [
+    .executableTarget(name: "digup-mcp", dependencies: ["DigUpKit", .product(name: "MCP", package: "swift-sdk")]),
     // The menubar + hotkey app. build.sh wraps it into build.noindex/DigUp.app. (The product can't be called
     // "DigUp": on a case-insensitive disk it would collide with the `digup` CLI binary.)
     .executableTarget(
         name: "DigUpApp",
-        dependencies: ["DigUpKit", .product(name: "Sparkle", package: "Sparkle")],
+        dependencies: ["DigUpKit"],
         swiftSettings: [.defaultIsolation(MainActor.self)],
         linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]
     ),

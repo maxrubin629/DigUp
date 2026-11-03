@@ -79,7 +79,8 @@ public struct WorkerConfig: Sendable {
     }
 }
 
-public enum WorkerError: Error, CustomStringConvertible {
+public enum WorkerError: Error, CustomStringConvertible, LocalizedError {
+    public var errorDescription: String? { description }
     case notFound(String), failed(String), died(String)
 
     public var description: String {

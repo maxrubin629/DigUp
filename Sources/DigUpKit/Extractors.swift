@@ -1,12 +1,14 @@
 import Foundation
 
-enum ExtractError: Error, CustomStringConvertible {
+enum ExtractError: Error, CustomStringConvertible, LocalizedError {
     case unreadable(String)
     case tooSmall(Int, Int)
     case locked
     case empty(String)
     /// Not for the index after all, once read (code that a program made, or that holds a private key).
     case leftOut(String)
+
+    var errorDescription: String? { description }
 
     var description: String {
         switch self {

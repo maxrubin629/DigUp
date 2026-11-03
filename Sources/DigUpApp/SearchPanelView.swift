@@ -1,6 +1,7 @@
 import AppKit
 import DigUpKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SearchPanelView: View {
     @Bindable var controller: SearchPanelController
@@ -8,6 +9,9 @@ struct SearchPanelView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            if let error = controller.media.error {
+                Text(error).font(.callout).foregroundStyle(.red).padding(12)
+            }
             if controller.phase != .empty {
                 Divider()
                 content
@@ -21,6 +25,7 @@ struct SearchPanelView: View {
         // Glass alone is too see-through over busy backgrounds.
         .background(Color(nsColor: .windowBackgroundColor).opacity(0.75))
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .onDrop(of: [UTType.fileURL.identifier, UTType.image.identifier], isTargeted: nil) { controller.media.drop($0) }
     }
 
     private var header: some View {
@@ -32,12 +37,17 @@ struct SearchPanelView: View {
                 .frame(width: 24)
                 .help(controller.isCode ? "Searching your code" : "")
             // With code search on, one example is code's: nothing else in the panel shows "code:".
+            if let input = controller.media.input {
+                Text(input.label).font(.system(size: 18)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+            } else {
             SearchField(text: $controller.query, fontSize: 22,
                         placeholder: controller.model.hasCode
                             ? "Describe it: “zebra in a video”, “code: retry with backoff”…"
                             : "Describe it: “payment error screenshot”, “zebra in a video”…") {
                 controller.field = $0
             }
+            }
+            MediaQueryButton(state: controller.media)
             if controller.phase == .words, controller.encoder == .starting {
                 ProgressView().controlSize(.small)
             }

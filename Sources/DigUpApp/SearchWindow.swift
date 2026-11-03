@@ -3,6 +3,7 @@ import DigUpKit
 import Observation
 import Quartz
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The search window, for the searches the panel is too small for: a big field, kind filters with counts, the results
 /// as a grid of pictures, and the selected one in a preview pane with why it matched. The Dock icon shows while it's
@@ -24,6 +25,7 @@ final class SearchWindowController: NSObject, NSWindowDelegate {
     func show(query: String? = nil, kind: ResultGroupKind? = nil) {
         let window = self.window ?? makeWindow()
         if let query {
+            search.media.remove()
             search.filter = kind
             search.query = query
         }
@@ -46,7 +48,7 @@ final class SearchWindowController: NSObject, NSWindowDelegate {
         window.toolbarStyle = .unified
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.title = "DigUp"
+        window.title = "DigUp Personal"
         window.minSize = NSSize(width: 820, height: 520)
         window.isReleasedWhenClosed = false
         window.delegate = self
@@ -104,6 +106,10 @@ final class SearchWindowController: NSObject, NSWindowDelegate {
     /// Arrows move through the grid (← → only once you've arrowed, so they still move the cursor while you type),
     /// ↩ opens, ⌘↩ reveals, Space previews, ⌘C copies, Esc closes the preview or clears the search.
     private func handle(_ event: NSEvent) -> Bool {
+        if event.keyCode == 9, event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+           search.media.pasteImage() { return true }
+        if event.keyCode == 53, search.media.input != nil { search.media.remove(); return true }
+
         // An input method is composing (Japanese, Chinese…): ↩, the arrows and Esc are its keys until it's done.
         if (search.field?.currentEditor() as? NSTextView)?.hasMarkedText() == true { return false }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -198,8 +204,14 @@ final class QuickLookWindow: NSWindow, QLPreviewPanelDataSource {
 /// The window's query: keyword and meaning results together after a short pause in typing, optionally of one kind.
 @Observable
 final class SearchModel {
+    let media = MediaQueryState()
     var query = "" {
-        didSet { if query != oldValue { run() } }
+        didSet {
+            if query != oldValue {
+                if !query.isEmpty, media.input != nil { media.attachment = nil }
+                run()
+            }
+        }
     }
     var filter: ResultGroupKind? {
         didSet { if filter != oldValue { run() } }
@@ -224,6 +236,12 @@ final class SearchModel {
 
     init(engine: Engine) {
         self.engine = engine
+        media.onChange = { [weak self] in
+            guard let self else { return }
+            self.query = ""
+            if self.filter == .code { self.filter = nil }
+            self.run()
+        }
     }
 
     /// Every result shown, in order (strong ones, then the weaker ones once they're unfolded).
@@ -268,6 +286,36 @@ final class SearchModel {
         let current = generation
         task?.cancel()
         navigated = false
+        media.error = nil
+        if let input = media.input {
+            if filter == .code { filter = nil; return }
+            codePhase = nil
+            media.isSearching = true
+            hasResults = false
+            results = .empty
+            let selectedKinds = filter?.kinds
+            task = Task {
+                do {
+                    let all = try await engine.searchMedia(input)
+                    let shown = selectedKinds == nil ? all : try await engine.searchMedia(input, kinds: selectedKinds)
+                    guard !Task.isCancelled, current == generation else { return }
+                    counts = [:]
+                    for hit in all.prefix(Searcher.strongCount(all)) { counts[ResultGroupKind(hit.kind), default: 0] += 1 }
+                    results = ResultSet(shown, query: "")
+                    selection = rows.first?.id
+                    showWeaker = false
+                    hasResults = true
+                    media.isSearching = false
+                } catch {
+                    guard !Task.isCancelled, current == generation else { return }
+                    media.error = error.localizedDescription
+                    media.isSearching = false
+                    hasResults = true
+                }
+            }
+            return
+        }
+        media.isSearching = false
         let typed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let code = isCode
         let text = CodeQuery.text(of: typed) ?? typed
@@ -337,6 +385,7 @@ struct SearchWindowView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            if let error = search.media.error { Text(error).font(.callout).foregroundStyle(.red).padding(10) }
             Divider()
             HStack(spacing: 0) {
                 content
@@ -361,6 +410,7 @@ struct SearchWindowView: View {
         }
         .ignoresSafeArea(.container, edges: .top)
         .frame(minWidth: 820, minHeight: 520)
+        .onDrop(of: [UTType.fileURL.identifier, UTType.image.identifier], isTargeted: nil) { search.media.drop($0) }
     }
 
     private var header: some View {
@@ -371,8 +421,13 @@ struct SearchWindowView: View {
                         .font(.system(size: search.isCode ? 15 : 17, weight: .semibold))
                         .foregroundStyle(Brand.gradient)
                         .frame(width: 22)
+                    if let input = search.media.input {
+                        Text(input.label).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
                     SearchField(text: $search.query, fontSize: 18, placeholder: placeholder,
                                 onMake: { search.field = $0 }, onFocus: { fieldFocused = $0 })
+                    }
+                    MediaQueryButton(state: search.media)
                     if !search.query.isEmpty {
                         Button {
                             search.query = ""
@@ -433,7 +488,7 @@ struct SearchWindowView: View {
             }
             .padding(.bottom, 24)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if search.query.trimmingCharacters(in: .whitespaces).isEmpty {
+        } else if search.query.trimmingCharacters(in: .whitespaces).isEmpty && search.media.input == nil {
             SearchHome(search: search, model: model, engine: app.engine)
         } else if let phase = search.codePhase {
             CodeOffOrHint(phase: phase, search: search) { app.chooseCodeFolders() }
@@ -462,7 +517,7 @@ struct SearchWindowView: View {
                 .lineLimit(1)
                 .help("Folders and indexing")
             Spacer()
-            if search.hasResults, !search.query.isEmpty {
+            if search.hasResults, !search.query.isEmpty || search.media.input != nil {
                 Text(model.resultsCaveat ?? resultCount).lineLimit(1)
             }
             if let version = model.updateAvailable {

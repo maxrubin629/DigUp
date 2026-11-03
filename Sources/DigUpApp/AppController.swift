@@ -84,6 +84,7 @@ final class AppController {
         Previews.shared.passage = { [engine] id, code in await engine.text(ofSegment: id, code: code) }
         CodeEditor.current = CodeEditor.chosen(model.settings.codeEditor)
         download.onReady = { [weak self] in self?.engine.modelArrived() }
+        updateOriginalIndexer()
         engine.start()
         let settings = model.settings
         if !settings.onboarded, settings.roots.isEmpty {
@@ -92,6 +93,11 @@ final class AppController {
             // Set up already (the go-ahead came with onboarding), so a missing model just downloads.
             if !download.isReady { download.start() }
             if showWindow { showSearchWindow() }
+        }
+        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
+            observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.updateOriginalIndexer() }
+            })
         }
         for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
             observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil,
@@ -265,6 +271,11 @@ final class AppController {
             log("login item: \(error)")
             return error.localizedDescription
         }
+    }
+
+    private func updateOriginalIndexer() {
+        let active = !NSRunningApplication.runningApplications(withBundleIdentifier: PersonalConfiguration.originalSuite).isEmpty
+        engine.setExternalIndexer(active)
     }
 
     // MARK: Windows

@@ -1,28 +1,34 @@
 import Foundation
-#if canImport(SQLite3)
-import SQLite3   // the system's (3.51 on macOS 26, FTS5 built in)
+#if canImport(CSQLite)
+import CSQLite
 #else
-import CSQLite   // the amalgamation in Vendor/sqlite, with FTS5 (scripts/fetch-vendor.sh)
+import SQLite3
 #endif
 
 /// A thin wrapper over SQLite. One connection, used from one thread.
 public final class Database {
-    public struct Failure: Error, CustomStringConvertible {
+    public struct Failure: Error, CustomStringConvertible, LocalizedError {
         public let message: String
         public var description: String { message }
+        public var errorDescription: String? { message }
     }
 
     let handle: OpaquePointer
 
-    public init(path: String) throws {
+    public init(path: String, readOnly: Bool = false) throws {
         var db: OpaquePointer?
-        guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil) == SQLITE_OK, let db else {
+        let flags = readOnly ? SQLITE_OPEN_READONLY : (SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE)
+        guard sqlite3_open_v2(path, &db, flags, nil) == SQLITE_OK, let db else {
             let message = db.map { String(cString: sqlite3_errmsg($0)) } ?? "cannot open \(path)"
             sqlite3_close(db)
-            throw Failure(message: message)
+            throw Failure(message: "Cannot open \(path): \(message)")
         }
         handle = db
         sqlite3_busy_timeout(db, 5000)
+        if readOnly {
+            try execute("PRAGMA query_only = ON; PRAGMA mmap_size = 1073741824")
+            return
+        }
         // Two processes opening a new index at once (a shell starts its search and index helpers together): the switch
         // to WAL can fail at once with "database is locked" rather than wait (SQLite's rule against deadlocks), so it's
         // tried again for up to five seconds.
@@ -42,6 +48,41 @@ public final class Database {
     }
 
     deinit { sqlite3_close_v2(handle) }
+
+    /// Online backup includes committed WAL pages, which a copy of the main file alone would lose.
+    public func backup(to url: URL) throws {
+        guard !FileManager.default.fileExists(atPath: url.path) else {
+            throw Failure(message: "A backup already exists at \(url.path)")
+        }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let temporary = url.deletingLastPathComponent().appendingPathComponent(".\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        var target: OpaquePointer?
+        guard sqlite3_open_v2(temporary.path, &target, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil) == SQLITE_OK,
+              let target else { throw Failure(message: "Cannot create the index backup") }
+        var targetOpen = true
+        defer { if targetOpen { sqlite3_close_v2(target) } }
+        guard let copy = sqlite3_backup_init(target, "main", handle, "main") else {
+            throw Failure(message: "Cannot start the index backup: \(String(cString: sqlite3_errmsg(target)))")
+        }
+        var status: Int32
+        var retries = 0
+        repeat {
+            status = sqlite3_backup_step(copy, 512)
+            if status == SQLITE_BUSY || status == SQLITE_LOCKED {
+                retries += 1
+                if retries > 100 { break }
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+        } while status == SQLITE_OK || status == SQLITE_BUSY || status == SQLITE_LOCKED
+        let finished = sqlite3_backup_finish(copy)
+        guard status == SQLITE_DONE, finished == SQLITE_OK else {
+            throw Failure(message: "Cannot finish the index backup: \(String(cString: sqlite3_errmsg(target)))")
+        }
+        guard sqlite3_close(target) == SQLITE_OK else { throw Failure(message: "Cannot close the index backup") }
+        targetOpen = false
+        try FileManager.default.moveItem(at: temporary, to: url)
+    }
 
     public func execute(_ sql: String) throws {
         var error: UnsafeMutablePointer<CChar>?

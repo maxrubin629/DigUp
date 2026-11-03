@@ -22,6 +22,7 @@ nonisolated struct EngineStatus: Sendable, Equatable {
         case unavailable
     }
 
+    var originalAppRunning = false
     var activity = Activity.starting
     var encoder = Encoder.stopped
     var files = 0        // in the index, any state
@@ -82,10 +83,7 @@ nonisolated struct EngineStatus: Sendable, Equatable {
 /// The folders can change while it runs (`setFolders`): the watcher follows, and the helper restarts with them.
 nonisolated final class Engine: @unchecked Sendable {
     /// A query's vector and the model that made it (vectors from different models can't be compared).
-    struct QueryVector: Sendable {
-        let values: [Float]
-        let source: String
-    }
+    typealias QueryVector = EncodedQuery
 
     let indexDirectory: URL
     let modelsDirectory: URL
@@ -155,6 +153,10 @@ nonisolated final class Engine: @unchecked Sendable {
     private var warnedAboutSource = false
 
     // encoderQueue only
+    private var mediaEncoder: SearchQueryEncoder?
+    private var externalIndexer = false
+    private var adoptionPrepared = false
+    private var mainDataVersion: Int64 = -1
     private var encoder: EmbeddingWorker?
     private var encoderFailed = false
     private var encoderIdleExit: DispatchWorkItem?
@@ -213,17 +215,21 @@ nonisolated final class Engine: @unchecked Sendable {
     /// Opens the searcher first (creating the index if it's new), so a search asked for right after launch already
     /// finds it on its queue; then starts the indexing helper, which syncs with the folders.
     func start() {
+        // Opening the reader stays on the interactive queue, ahead of any early search.
         searchQueue.async { [self] in
-            guard openSearcher() else {
-                update { $0.activity = .failed("Can't open the index") }
-                return
-            }
-            indexQueue.async { [self] in startHelper() }
+            do {
+                try IndexAdoption.check(directory: indexDirectory)
+                if !FileManager.default.fileExists(atPath: indexDirectory.appendingPathComponent(IndexStore.mainFile).path) {
+                    _ = try IndexStore(directory: indexDirectory)
+                }
+                guard openSearcher() else {
+                    update { $0.activity = .failed("Can't open the existing index") }
+                    return
+                }
+                indexQueue.async { [self] in startHelper() }
+            } catch { update { $0.activity = .failed(error.localizedDescription) } }
         }
-        watchQueue.async { [self] in
-            startWatching()
-            startWatchingCode()
-        }
+        watchQueue.async { [self] in startWatching(); startWatchingCode() }
     }
 
     var folders: (roots: [URL], excluded: [URL]) {
@@ -319,7 +325,7 @@ nonisolated final class Engine: @unchecked Sendable {
         let started = Date()
         do {
             // Keyword search only until the panel opens: the vectors load then, and leave with the query encoder.
-            let store = try IndexStore(directory: indexDirectory)
+            let store = try IndexStore(directory: indexDirectory, readOnly: true)
             let searcher = try Searcher(store: store, loadVectors: false)
             self.searcher = searcher
             searchStore = store
@@ -337,7 +343,7 @@ nonisolated final class Engine: @unchecked Sendable {
     /// The code index's searcher (searchQueue), when code search is on; its vectors load with the first search of code.
     private func openCodeSearcher() {
         do {
-            let store = try IndexStore(directory: indexDirectory, file: IndexStore.codeFile)
+            let store = try IndexStore(directory: indexDirectory, file: IndexStore.codeFile, readOnly: true)
             codeSearcher = try Searcher(store: store, loadVectors: false)
             codeStore = store
             if let counts = try? store.counts() { applyCode(counts) }
@@ -348,7 +354,10 @@ nonisolated final class Engine: @unchecked Sendable {
 
     /// Code search was turned off: its index goes (indexQueue, with no helper running).
     private func removeCodeIndexIfAsked() {
-        guard deleteCodeIndex, helper == nil else { return }
+        guard deleteCodeIndex, helper == nil, !lock.withLock({ externalIndexer }) else { return }
+        guard !UserDefaults.standard.bool(forKey: "personalReadOnly") else { return }
+        do { try IndexAdoption.prepareForWriting(directory: indexDirectory) }
+        catch { update { $0.activity = .failed(error.localizedDescription) }; return }
         deleteCodeIndex = false
         let file = indexDirectory.appendingPathComponent(IndexStore.codeFile)
         for path in [file.path, file.path + "-wal", file.path + "-shm"] where FileManager.default.fileExists(atPath: path) {
@@ -487,6 +496,20 @@ nonisolated final class Engine: @unchecked Sendable {
     /// 50 new files on any power source, then the backfill if the power policy allows; it exits a minute after
     /// its last file. Before the model has downloaded it only syncs (file names become searchable) and exits.
     private func startHelper() {
+        guard !lock.withLock({ externalIndexer }) else {
+            update { $0.waitingFor = "Original DigUp is indexing; search is available"; $0.activity = .idle }
+            return
+        }
+        guard !UserDefaults.standard.bool(forKey: "personalReadOnly") else {
+            update { $0.waitingFor = "Search only"; $0.activity = .idle }
+            return
+        }
+        do { try IndexAdoption.check(directory: indexDirectory) }
+        catch { update { $0.activity = .failed(error.localizedDescription) }; return }
+        if !adoptionPrepared {
+            do { try IndexAdoption.prepareForWriting(directory: indexDirectory); adoptionPrepared = true }
+            catch { update { $0.activity = .failed(error.localizedDescription) }; return }
+        }
         let (roots, excluded, types, paused, backfill): ([URL], [URL], [String], Bool, Bool) = lock.withLock {
             (self.roots, self.excluded, self.excludedTypes, self.paused || heldUntil != nil, backfillBlocker == nil)
         }
@@ -831,50 +854,74 @@ nonisolated final class Engine: @unchecked Sendable {
     /// shows while the query encoder starts. Files that are gone (deleted since the last sync, or on a drive that's
     /// unplugged) are left out.
     /// `code`: the code index (its own folders), never anything else.
+    private func queryConfiguration() -> PersonalConfiguration {
+        lock.withLock {
+            PersonalConfiguration(indexDirectory: indexDirectory, modelsDirectory: modelsDirectory,
+                roots: roots.map(\.path), excluded: excluded.map(\.path), excludedTypes: Set(excludedTypes),
+                codeRoots: codeRoots.map(\.path), codeExcluded: codeExcluded.map(\.path))
+        }
+    }
+
+    private func refreshExternalIndex() throws {
+        guard let store = searchStore else { return }
+        var version: Int64 = 0
+        try store.db.query("PRAGMA data_version") { version = $0.int(0) }
+        if mainDataVersion != -1, version != mainDataVersion { try searcher?.reload(); try codeSearcher?.reload() }
+        mainDataVersion = version
+    }
+
     func search(_ text: String, vector: QueryVector?, prefixLast: Bool, kinds: Set<FileKind>? = nil,
                 limit: Int = 40, code: Bool = false) async -> [SearchHit] {
-        if code { return await searchCode(text, vector: vector, prefixLast: prefixLast, limit: limit) }
-        return await withCheckedContinuation { continuation in
+        await withCheckedContinuation { continuation in
             searchQueue.async { [self] in
-                var values = vector?.values
-                if let vector, let indexed = searcher?.vectorSource, indexed != vector.source {
-                    if !warnedAboutSource {
-                        log("meaning search is off: the index was built with \(indexed), the encoder is \(vector.source)")
-                        warnedAboutSource = true
-                    }
-                    values = nil
-                }
-                let hits = try? searcher?.search(text, queryVector: values, kinds: kinds, limit: limit,
-                                                 prefixLast: prefixLast)
-                // Only files that are searched (`FolderSelection`'s rule, as the crawler walks them) and of types not
-                // skipped: a removed folder's rows (or a newly skipped type's) can outlive it until a helper syncs
-                // (indexing was paused, or the app quit first).
-                let (chosen, excluded, types): ([URL], [URL], Set<String>) = lock.withLock {
-                    (self.roots, self.excluded, Set(self.excludedTypes))
-                }
-                let folders = chosen.map(\.path), skipped = excluded.map(\.path)
-                continuation.resume(returning: (hits ?? []).filter { hit in
-                    FolderSelection.isSearched(hit.path, folders: folders, skipped: skipped)
-                        && !types.contains((hit.path as NSString).pathExtension.lowercased())
-                        && FileManager.default.fileExists(atPath: hit.path)
-                })
+                do {
+                    try refreshExternalIndex()
+                    guard let target = code ? codeSearcher : searcher else { return continuation.resume(returning: []) }
+                    let page = try SearchExecution.search(target, text: text, vector: vector,
+                        configuration: queryConfiguration(), code: code, kinds: kinds, limit: limit, prefixLast: prefixLast)
+                    continuation.resume(returning: page.hits)
+                } catch { log("search: \(error)"); continuation.resume(returning: []) }
             }
         }
     }
 
-    private func searchCode(_ text: String, vector: QueryVector?, prefixLast: Bool, limit: Int) async -> [SearchHit] {
-        await withCheckedContinuation { continuation in
-            searchQueue.async { [self] in
-                let (roots, skipped) = lock.withLock { (codeRoots.map(\.path), codeExcluded.map(\.path)) }
-                guard !roots.isEmpty, let codeSearcher else { return continuation.resume(returning: []) }
-                var values = vector?.values
-                if let vector, let indexed = codeSearcher.vectorSource, indexed != vector.source { values = nil }
-                let hits = (try? codeSearcher.search(text, queryVector: values, limit: limit, prefixLast: prefixLast)) ?? []
-                continuation.resume(returning: hits.filter { hit in
-                    FolderSelection.isSearched(hit.path, folders: roots, skipped: skipped)
-                        && FileManager.default.fileExists(atPath: hit.path)
-                })
+    func searchMedia(_ input: SearchInput, kinds: Set<FileKind>? = nil, limit: Int = 120) async throws -> [SearchHit] {
+        let vector: EncodedQuery = try await withCheckedThrowingContinuation { continuation in
+            encoderQueue.async { [self] in
+                do {
+                    if mediaEncoder == nil {
+                        mediaEncoder = SearchQueryEncoder(
+                            helper: Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/digup"),
+                            models: modelsDirectory, idleSeconds: encoderIdleSeconds)
+                    }
+                    continuation.resume(returning: try mediaEncoder!.encode(input))
+                } catch { continuation.resume(throwing: error) }
             }
+        }
+        try Task.checkCancellation()
+        return try await withCheckedThrowingContinuation { continuation in
+            searchQueue.async { [self] in
+                do {
+                    try refreshExternalIndex()
+                    guard let searcher else { throw SearchFailure("The index is not ready yet.") }
+                    let page = try SearchExecution.search(searcher, text: "", vector: vector,
+                        configuration: queryConfiguration(), media: true, kinds: kinds, limit: limit)
+                    continuation.resume(returning: page.hits)
+                } catch { continuation.resume(throwing: error) }
+            }
+        }
+    }
+
+    func setExternalIndexer(_ active: Bool) {
+        let changed = lock.withLock { () -> Bool in
+            defer { externalIndexer = active }
+            return externalIndexer != active
+        }
+        guard changed else { return }
+        update { $0.originalAppRunning = active }
+        indexQueue.async { [self] in
+            if active { stopHelper(); update { $0.waitingFor = "Original DigUp is indexing; search is available" } }
+            else { update { $0.waitingFor = self.backfillBlocker }; startHelper() }
         }
     }
 

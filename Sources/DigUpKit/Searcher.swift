@@ -37,6 +37,7 @@ public final class Searcher {
     /// False for the vectors the later pass adds (`Indexer.finishLongFiles`): scored, but they don't set the scale.
     private var rowSetsScale: [Bool] = []
     private var fileKind: [Int64: FileKind] = [:]
+    private var filePath: [Int64: String] = [:]
     public private(set) var vectorSource: String?
     /// False after `releaseVectors()` (or `loadVectors: false`): keyword search still works, and the next search with
     /// a query vector loads them again.
@@ -99,8 +100,10 @@ public final class Searcher {
 
     private func reloadFiles() throws {
         fileKind.removeAll(keepingCapacity: true)
-        try store.db.query("SELECT id, kind FROM files") { row in
+        filePath.removeAll(keepingCapacity: true)
+        try store.db.query("SELECT id, kind, path FROM files") { row in
             fileKind[row.int(0)] = FileKind(rawValue: row.text(1) ?? "")
+            filePath[row.int(0)] = row.text(2)
         }
         vectorSource = try store.meta("vector_source")
     }
@@ -113,11 +116,19 @@ public final class Searcher {
     public static let codeWordWeight = 1.0
 
     public func search(_ text: String, queryVector: [Float]?, kinds: Set<FileKind>? = nil, limit: Int = 20,
-                       zGate: Double = 2.0, wordWeight: Double? = nil, prefixLast: Bool = false) throws -> [SearchHit] {
+                       zGate: Double = 2.0, wordWeight: Double? = nil, prefixLast: Bool = false,
+                       acceptsPath: ((String) -> Bool)? = nil) throws -> [SearchHit] {
         let wordWeight = wordWeight ?? (isCode ? Self.codeWordWeight : Self.wordWeight)
         if queryVector != nil, !vectorsLoaded { try reload() }
         let fileKind = self.fileKind
-        let allowed = { (file: Int64) -> Bool in kinds == nil || fileKind[file].map { kinds!.contains($0) } ?? false }
+        var allowedFiles: [Int64: Bool] = [:]
+        let allowed = { (file: Int64) -> Bool in
+            if let cached = allowedFiles[file] { return cached }
+            let value = (kinds == nil || fileKind[file].map { kinds!.contains($0) } ?? false)
+                && (acceptsPath == nil || self.filePath[file].map { acceptsPath!($0) } == true)
+            allowedFiles[file] = value
+            return value
+        }
 
         // Meaning: score every vector on this query's scale (`meaning`), keep each file's best segment.
         var best: [Int64: (z: Double, cosine: Double, row: Int)] = [:]

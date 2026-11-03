@@ -42,6 +42,10 @@ import Testing
         }
     }
 
+    @Test func personalModelIdentityMatchesRuntime() {
+        #expect(PersonalConfiguration.vectorSource == LlamaEmbedder.modelInfo.vectorSource)
+    }
+
     @Test(.enabled(if: modelsThere)) func vectorsMatchTheReference() throws {
         let made = try Self.vectors()
         let url = Self.folder.appendingPathComponent("vectors.json")

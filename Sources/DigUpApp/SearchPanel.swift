@@ -33,8 +33,14 @@ final class SearchPanelController {
     /// The selectable row that folds and unfolds the weaker matches.
     static let weakerToggle = "\u{0}weaker"
 
+    let media = MediaQueryState()
     var query = "" {
-        didSet { if query != oldValue { queryChanged() } }
+        didSet {
+            if query != oldValue {
+                if !query.isEmpty, media.input != nil { media.attachment = nil }
+                queryChanged()
+            }
+        }
     }
     private(set) var results = ResultSet.empty
     private(set) var showWeaker = false
@@ -77,6 +83,12 @@ final class SearchPanelController {
         self.app = app
         model = app.model
         engine = app.engine
+        media.onError = { [weak self] in self?.resizeWindow() }
+        media.onChange = { [weak self] in
+            guard let self else { return }
+            self.query = ""
+            self.queryChanged()
+        }
     }
 
     var isVisible: Bool { window?.isVisible == true && !fading }
@@ -182,6 +194,32 @@ final class SearchPanelController {
         typedAt = Date()
         navigated = false
         meaningTask?.cancel()
+        media.error = nil
+        if let input = media.input {
+            isCode = false
+            phase = .words
+            results = .empty
+            selection = nil
+            media.isSearching = true
+            resizeWindow()
+            meaningTask = Task {
+                do {
+                    let hits = try await engine.searchMedia(input)
+                    guard !Task.isCancelled, current == generation else { return }
+                    media.isSearching = false
+                    finalGeneration = current
+                    show(hits, query: "", phase: .meaning)
+                    onFinalResults?()
+                } catch {
+                    guard !Task.isCancelled, current == generation else { return }
+                    media.isSearching = false
+                    media.error = error.localizedDescription
+                    show([], query: "", phase: .meaning)
+                }
+            }
+            return
+        }
+        media.isSearching = false
         let typed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let codeText = CodeQuery.text(of: typed)
         isCode = codeText != nil
@@ -202,6 +240,8 @@ final class SearchPanelController {
             resizeWindow()
             return
         }
+        phase = .words
+        resizeWindow()
         // Words now. The last word is probably half-typed, so it matches as a prefix.
         Task {
             let started = Date()
@@ -273,7 +313,7 @@ final class SearchPanelController {
         resignObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.hide() }
+            MainActor.assumeIsolated { if self?.media.isChoosing != true { self?.hide() } }
         }
         // Another of the app's windows came forward (⌘, or ⌘N while the panel was up): the panel steps away, like
         // Spotlight, rather than float over it and take its keys.
@@ -282,7 +322,7 @@ final class SearchPanelController {
         ) { [weak self] note in
             let window = note.object as? NSWindow
             MainActor.assumeIsolated {
-                guard let self, let window, window !== self.window, !(window is QLPreviewPanel) else { return }
+                guard let self, !self.media.isChoosing, let window, window !== self.window, !(window is QLPreviewPanel) else { return }
                 if Date().timeIntervalSince(self.shownAt) < 0.5 {
                     // Activating the app can hand the key to its last window just after the panel opened: take it back.
                     self.window?.makeKey()
@@ -313,6 +353,10 @@ final class SearchPanelController {
 
     /// True when the key was handled here (it then doesn't reach the search field).
     private func handle(_ event: NSEvent) -> Bool {
+        if event.keyCode == 9, event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+           media.pasteImage() { return true }
+        if event.keyCode == 53, media.input != nil { media.remove(); return true }
+
         // An input method is composing (Japanese, Chinese…): ↩, the arrows and Esc are its keys until it's done.
         if (field?.currentEditor() as? NSTextView)?.hasMarkedText() == true { return false }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -398,8 +442,10 @@ final class SearchPanelController {
     /// The search window, with this query (and only one kind, if given): for a bigger look.
     func openInWindow(_ kind: ResultGroupKind? = nil) {
         let text = query
+        let attachment = media.attachment
         hide()
         app.showSearchWindow(query: text, kind: kind)
+        if let attachment { app.searchWindow.search.media.attachment = attachment }
     }
 
     /// No folders yet: hide, and open where they're chosen.
@@ -472,7 +518,7 @@ final class SearchPanelController {
     }
 
     private var desiredHeight: CGFloat {
-        query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Self.fieldHeight : Self.expandedHeight
+        query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && media.input == nil && media.error == nil ? Self.fieldHeight : Self.expandedHeight
     }
 
     /// Centered on the screen with the pointer, a little above the middle, like Spotlight.
