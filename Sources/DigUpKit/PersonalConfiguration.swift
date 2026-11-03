@@ -71,9 +71,9 @@ public struct PersonalConfiguration: Codable, Sendable {
     public func allows(_ path: String, code: Bool = false) -> Bool { pathFilter(code: code)(path) }
 
     /// Imports all app preferences once, including schedules and onboarding, without altering the original domain.
-    public static func importPreferences(into defaults: UserDefaults) {
+    public static func importPreferences(into defaults: UserDefaults, from domain: String = originalSuite) {
         guard !defaults.bool(forKey: "personalImported") else { return }
-        let source = UserDefaults.standard.persistentDomain(forName: originalSuite) ?? [:]
+        let source = UserDefaults.standard.persistentDomain(forName: domain) ?? [:]
         for (key, value) in source where !key.hasPrefix("SU") && !key.hasPrefix("NS") {
             if defaults.object(forKey: key) == nil { defaults.set(value, forKey: key) }
         }

@@ -3,7 +3,7 @@ import Foundation
 
 /// What to index, where the index and the model live, and the hotkey.
 ///
-/// Saved in the app's defaults domain (com.abdurrahim.DigUp). Launch arguments override any of it without being
+/// Saved in the app's defaults domain (dev.digup.personal). Launch arguments override any of it without being
 /// saved, which is how tests point the app at the testbed and never at real folders:
 ///
 ///     DigUp.app/Contents/MacOS/DigUp -roots ~/DigUpTestbed/real -indexDir <repo>/.dev/app-index \
@@ -54,9 +54,11 @@ nonisolated struct AppSettings: Sendable {
 
     /// Where settings are saved. Reads see launch arguments first either way. (UserDefaults is thread-safe.)
     nonisolated(unsafe) static let defaults: UserDefaults = {
-        guard let suite = UserDefaults.standard.string(forKey: "defaultsSuite"), !suite.isEmpty,
-              let defaults = UserDefaults(suiteName: suite) else { return .standard }
-        return defaults
+        if let suite = UserDefaults.standard.string(forKey: "defaultsSuite"), !suite.isEmpty,
+           let isolated = UserDefaults(suiteName: suite) { return isolated }
+        let personal = UserDefaults.standard
+        PersonalConfiguration.importPreferences(into: personal)
+        return personal
     }()
 
     static func load() -> AppSettings {

@@ -40,6 +40,44 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: missing.path))
     }
 
+    @Test func firstLaunchImportsPreferencesOnceWithoutChangingTheOriginal() throws {
+        let originalDomain = "dev.digup.test.original.\(UUID().uuidString)"
+        let personalDomain = "dev.digup.test.personal.\(UUID().uuidString)"
+        let original: [String: Any] = [
+            "roots": ["/chosen"], "excludedFolders": ["/chosen/private"],
+            "excludedTypes": ["heic"], "indexDir": "/custom/index", "modelsDir": "/custom/models",
+            "onboarded": true, "indexHoursOn": true, "indexHoursFrom": 23, "indexHoursTo": 6,
+            "indexOnBattery": false, "hotkey": "cmd+option+space",
+            "SUFeedURL": "https://example.invalid", "NSWindow Frame Search": "old frame"
+        ]
+        UserDefaults.standard.setPersistentDomain(original, forName: originalDomain)
+        let personal = try #require(UserDefaults(suiteName: personalDomain))
+        defer {
+            UserDefaults.standard.removePersistentDomain(forName: originalDomain)
+            UserDefaults.standard.removePersistentDomain(forName: personalDomain)
+        }
+        personal.set("custom-hotkey", forKey: "hotkey")
+        PersonalConfiguration.importPreferences(into: personal, from: originalDomain)
+        #expect(personal.stringArray(forKey: "roots") == ["/chosen"])
+        #expect(personal.stringArray(forKey: "excludedFolders") == ["/chosen/private"])
+        #expect(personal.stringArray(forKey: "excludedTypes") == ["heic"])
+        #expect(personal.string(forKey: "indexDir") == "/custom/index")
+        #expect(personal.string(forKey: "modelsDir") == "/custom/models")
+        #expect(personal.bool(forKey: "onboarded"))
+        #expect(personal.bool(forKey: "indexHoursOn"))
+        #expect(personal.integer(forKey: "indexHoursFrom") == 23)
+        #expect(personal.integer(forKey: "indexHoursTo") == 6)
+        #expect(!personal.bool(forKey: "indexOnBattery"))
+        #expect(personal.string(forKey: "hotkey") == "custom-hotkey")
+        #expect(personal.object(forKey: "SUFeedURL") == nil)
+        #expect(personal.object(forKey: "NSWindow Frame Search") == nil)
+        personal.set(["/new-choice"], forKey: "roots")
+        PersonalConfiguration.importPreferences(into: personal, from: originalDomain)
+        #expect(personal.stringArray(forKey: "roots") == ["/new-choice"])
+        let unchanged = try #require(UserDefaults.standard.persistentDomain(forName: originalDomain))
+        #expect(NSDictionary(dictionary: unchanged).isEqual(to: original))
+    }
+
     @Test func adoptionBacksUpCommittedWALWithoutChangingVectors() throws {
         let writer = try store()
         let vector = FakeEmbedder.vector(for: "existing")
