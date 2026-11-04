@@ -14,9 +14,9 @@ Personal builds have upstream updates disabled.
 
 ## Search with an image or audio clip
 
-Use the paperclip in either search window, drop one image/audio file into the window, or paste an image with Command-V. Remove the attachment to return to text search. Opening the larger window from the quick panel retains the attachment.
+Use the paperclip in either search window, drop one image/audio file into the window, or paste an image with Command-V. Image queries show a thumbnail; click it to inspect the search image at a larger size. Use Replace to choose another example, or remove the attachment to return to text search. Opening the larger window from the quick panel retains the attachment.
 
-Audio is an example to search with. A recording over 30 seconds opens a clip selector with playback and start/length controls. Short recordings default to their whole duration. Silence, invalid ranges, unreadable files, and missing models produce an explanation. Attachments are temporary query inputs and are not added to the index.
+Audio is an example to search with. A recording over 30 seconds opens a clip selector with a waveform, draggable range handles, editable start/end timestamps, and playback progress. Editing a clip preserves the current selection. Enter seconds, minutes:seconds, or hours:minutes:seconds; clips remain limited to 30 seconds. Short recordings default to their whole duration. Silence, invalid ranges, unreadable files, and missing models produce an explanation. Attachments are temporary query inputs and are not added to the index.
 
 Each query uses text, one image, or one audio clip. Code search continues to use text queries beginning with `code:`.
 
@@ -28,7 +28,7 @@ Put the app in its final location, then copy the command from **Settings → Int
 codex mcp add digup -- '/Applications/DigUp Personal.app/Contents/Helpers/digup-mcp'
 ```
 
-Restart Codex after adding the connection. The server uses local stdio, needs no port or account, and does not load the model until a search requires it. Search results and context sent to Codex are handled like its other tool results.
+Settings → Integrations checks whether Codex is configured for this app and offers a separate local server test. The test performs an MCP handshake, discovers all three tools, and reads index status without loading models. A passing local test does not mean Codex has reloaded its configuration; restart Codex after adding the connection. The server uses local stdio, needs no port or account, and does not load the model until a search requires it. Search results and context sent to Codex are handled like its other tool results.
 
 ### Tools
 

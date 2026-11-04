@@ -789,6 +789,7 @@ private struct PathButton: View {
 
 private struct IntegrationsSettings: View {
     @State private var copied = false
+    @State private var connection = IntegrationConnectionModel()
     private var command: String {
         let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/digup-mcp").path
         return "codex mcp add digup -- '" + helper.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
@@ -798,6 +799,67 @@ private struct IntegrationsSettings: View {
             Text("Connect Codex").font(.title2.bold())
             Text("Let Codex search the same index with text, images, or audio clips. Your chosen folders and exclusions apply.")
                 .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label(connection.configuration?.title ?? "Checking Codex configuration…",
+                          systemImage: connection.configuration?.state == .ready ? "checkmark.circle.fill" : "gearshape")
+                        .font(.headline)
+                        .foregroundStyle(connection.configuration?.state == .ready ? Color.green : Color.primary)
+                    Spacer()
+                    if connection.checkingConfiguration { ProgressView().controlSize(.small).accessibilityLabel("Checking Codex configuration") }
+                    Button("Refresh") { Task { await connection.refresh() } }
+                        .disabled(connection.checkingConfiguration)
+                }
+                if let detail = connection.configuration?.detail {
+                    Text(detail).font(.callout).foregroundStyle(.secondary)
+                }
+                if let date = connection.configurationCheckedAt {
+                    Text("Checked \(date.formatted(date: .omitted, time: .shortened))")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label(connection.testing ? "Testing local server…" : connection.test.map { $0.success ? "Local server test passed" : "Local server needs attention" } ?? "Local server not tested",
+                          systemImage: connection.test?.success == true ? "checkmark.circle.fill" : "network")
+                        .font(.headline)
+                        .foregroundStyle(connection.test?.success == true && !connection.testing ? Color.green : Color.primary)
+                    Spacer()
+                    if connection.testing { ProgressView().controlSize(.small).accessibilityLabel("Testing local MCP server") }
+                }
+                if let result = connection.test, !connection.testing {
+                    Text(result.message).font(.callout)
+                        .foregroundStyle(result.success ? Color.secondary : Color.orange)
+                    if result.success, let indexed = result.indexed {
+                        Text("\(indexed.formatted()) files indexed · \((result.pending ?? 0).formatted()) pending")
+                            .font(.callout).foregroundStyle(.secondary)
+                        if result.modelReady == false {
+                            Text("Models are not ready. Check Storage before running a semantic search.")
+                                .font(.callout).foregroundStyle(.orange)
+                        }
+                    }
+                    if let date = connection.testedAt {
+                        Text("Tested \(date.formatted(date: .omitted, time: .shortened))")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("Checks the handshake, available tools, and read-only index access. Models stay unloaded.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                Button(connection.testing ? "Testing…" : "Test local connection") {
+                    Task { await connection.testConnection() }
+                }
+                .disabled(connection.testing)
+            }
+            .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+            Text("These checks verify setup on this Mac. They do not confirm that a running Codex session has connected.")
+                .font(.caption).foregroundStyle(.secondary)
+            Divider()
+            Text("Connection command").font(.headline)
             Text(command).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                 .padding(12).background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
             Button(copied ? "Copied" : "Copy connection command") {
@@ -808,5 +870,6 @@ private struct IntegrationsSettings: View {
             Text("Run this command in Terminal, then restart Codex to connect. DigUp Personal can keep indexing while Codex searches.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }.padding(24)
+            .task { await connection.refresh() }
     }
 }

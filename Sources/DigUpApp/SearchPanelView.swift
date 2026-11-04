@@ -38,7 +38,7 @@ struct SearchPanelView: View {
                 .help(controller.isCode ? "Searching your code" : "")
             // With code search on, one example is code's: nothing else in the panel shows "code:".
             if let input = controller.media.input {
-                Text(input.label).font(.system(size: 18)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                QueryAttachmentView(input: input, state: controller.media)
             } else {
             SearchField(text: $controller.query, fontSize: 22,
                         placeholder: controller.model.hasCode

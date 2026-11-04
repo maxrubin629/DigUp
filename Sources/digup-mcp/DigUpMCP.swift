@@ -125,6 +125,13 @@ private struct DigUpMCP {
     static func main() async throws {
         signal(SIGPIPE, SIG_IGN)
         let executable = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
+        if CommandLine.arguments.dropFirst().contains("--self-test") {
+            let report = ConnectionSelfTest.run(executable: executable)
+            var data = try JSONEncoder().encode(report)
+            data.append(10)
+            try FileHandle.standardOutput.write(contentsOf: data)
+            exit(report.success ? 0 : 1)
+        }
         let helper = ProcessInfo.processInfo.environment["DIGUP_HELPER"].map { URL(fileURLWithPath: $0) }
             ?? executable.deletingLastPathComponent().appendingPathComponent("digup")
         let host = SearchHost(helper: helper)

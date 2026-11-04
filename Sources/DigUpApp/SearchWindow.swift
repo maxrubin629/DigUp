@@ -106,6 +106,7 @@ final class SearchWindowController: NSObject, NSWindowDelegate {
     /// Arrows move through the grid (← → only once you've arrowed, so they still move the cursor while you type),
     /// ↩ opens, ⌘↩ reveals, Space previews, ⌘C copies, Esc closes the preview or clears the search.
     private func handle(_ event: NSEvent) -> Bool {
+        guard !search.media.isChoosing else { return false }
         if event.keyCode == 9, event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
            search.media.pasteImage() { return true }
         if event.keyCode == 53, search.media.input != nil { search.media.remove(); return true }
@@ -422,7 +423,7 @@ struct SearchWindowView: View {
                         .foregroundStyle(Brand.gradient)
                         .frame(width: 22)
                     if let input = search.media.input {
-                        Text(input.label).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                        QueryAttachmentView(input: input, state: search.media)
                     } else {
                     SearchField(text: $search.query, fontSize: 18, placeholder: placeholder,
                                 onMake: { search.field = $0 }, onFocus: { fieldFocused = $0 })

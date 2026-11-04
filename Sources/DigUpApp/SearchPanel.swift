@@ -353,6 +353,7 @@ final class SearchPanelController {
 
     /// True when the key was handled here (it then doesn't reach the search field).
     private func handle(_ event: NSEvent) -> Bool {
+        guard !media.isChoosing else { return false }
         if event.keyCode == 9, event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
            media.pasteImage() { return true }
         if event.keyCode == 53, media.input != nil { media.remove(); return true }

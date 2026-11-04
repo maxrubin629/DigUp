@@ -9,6 +9,7 @@ import SwiftUI
 ///                             snapshot runs don't take the keyboard from whoever is at the Mac (no key tests then)
 ///     -debugMenu YES          log the menu once the index is open, then run Pause and Resume and log it again
 ///     -debugQuery "<text>"    open the panel and search for <text>, as if it had been typed ("": the empty panel)
+///     -debugAttachment PATH  with an empty debugQuery and an isolated defaultsSuite, attach a media fixture
 ///     -debugSnapshot <png>    once the final results and their pictures are showing, draw the panel into <png>
 ///     -debugKeys "down,space,esc,cmd+c"   then press these keys (posted through the app's own event queue, so
 ///                             no Accessibility permission is needed) and log what each one did. ⌘C goes to a
@@ -199,6 +200,10 @@ enum DebugHooks {
         let panel = app.panel!
         if text.isEmpty {   // the panel as the hotkey opens it: nothing to wait for
             panel.show()
+            if defaults.string(forKey: "defaultsSuite") != nil,
+               let path = defaults.string(forKey: "debugAttachment") {
+                panel.media.select(URL(fileURLWithPath: path))
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 save("panel", { try panel.snapshot(to: $0) }, to: snapshot)
                 done()
